@@ -10,51 +10,28 @@ for bad posture.
 - Automatically releases the camera during calls
 - No third-party dependencies, accounts, uploads, or saved camera frames
 
-## Install on macOS
+## Download and install
 
-PostureBar requires macOS 13 or later. Follow these steps exactly.
+PostureBar requires macOS 13 or later and supports Apple Silicon and Intel Macs.
 
-### 1. Install Apple's Command Line Tools
+1. Open the [latest release](https://github.com/bogumat/posturebar/releases/latest).
+2. Under **Assets**, download `PostureBar-…-universal.zip`.
+3. Open the downloaded ZIP, then drag `PostureBar.app` into **Applications**.
+4. Double-click `PostureBar.app` in Applications.
 
-Open **Terminal** from **Applications → Utilities**, paste this command, and
-press Return:
+The current release is not Apple-notarized, so macOS will block its first
+launch. After attempting step 4:
 
-```sh
-xcode-select --install
-```
+1. Open **Apple menu → System Settings → Privacy & Security**.
+2. Scroll to **Security** and click **Open Anyway** beside PostureBar.
+3. Confirm with your password, then click **Open**.
 
-Complete the installer window before continuing. If Terminal says the tools
-are already installed, continue to step 2.
+This exception is needed only once. See [Apple's instructions for opening an
+app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
 
-### 2. Download and install PostureBar
-
-Paste this entire block into Terminal:
-
-```sh
-mkdir -p ~/Projects
-cd ~/Projects
-git clone https://github.com/bogumat/posturebar.git
-cd posturebar
-make install
-```
-
-Wait for the final line to show:
-
-```text
-/Users/YOUR-NAME/Applications/PostureBar.app
-```
-
-### 3. Launch PostureBar
-
-Run:
-
-```sh
-open ~/Applications/PostureBar.app
-```
-
-When macOS asks for camera access, click **Allow**. Sit upright and reasonably
-still for about four seconds while PostureBar calibrates. Its icon will then
-appear in the menu bar.
+When asked for camera access, click **Allow**. Sit upright and reasonably still
+for about four seconds while PostureBar calibrates. Its icon will then appear
+in the menu bar.
 
 PostureBar prefers a camera with `UGREEN` in its name, then another external
 camera, then the built-in camera. Click the menu-bar icon to choose a different
@@ -79,7 +56,14 @@ then resumes automatically when the call ends. You can also pause it manually.
 ## Optional: Raycast shortcuts
 
 Raycast is not required. These shortcuts only provide quick ways to start,
-stop, or open the project.
+stop, or open the project. They require a local copy of this repository. If you
+installed the downloadable app, run this first in Terminal:
+
+```sh
+mkdir -p ~/Projects
+cd ~/Projects
+git clone https://github.com/bogumat/posturebar.git
+```
 
 1. Open **Raycast Settings (`⌘,`) → Extensions**.
 2. Click **+** in the top-right and select **Add Script Directory**.
@@ -96,13 +80,27 @@ Raycast will add:
 To assign a keyboard shortcut, find a command in Raycast, press `⌘K`, select
 **Configure Command**, and record a hotkey.
 
-## Update
+## Update the downloaded app
 
-Quit PostureBar, then run:
+Quit PostureBar, download the newest ZIP from the [releases
+page](https://github.com/bogumat/posturebar/releases), and replace the existing
+app in Applications. Your calibration and settings are preserved.
+
+## Build from source
+
+Install Apple's Command Line Tools:
 
 ```sh
-cd ~/Projects/posturebar
-git pull
+xcode-select --install
+```
+
+Then clone, build, and install:
+
+```sh
+mkdir -p ~/Projects
+cd ~/Projects
+git clone https://github.com/bogumat/posturebar.git
+cd posturebar
 make install
 open ~/Applications/PostureBar.app
 ```
@@ -112,6 +110,7 @@ open ~/Applications/PostureBar.app
 ```sh
 make test   # Run checks
 make app    # Build .build/PostureBar.app
+make package # Build a universal release ZIP in dist/
 ```
 
 PostureBar uses AppKit, AVFoundation, Vision, and CoreAudio. Camera frames are
