@@ -20,45 +20,55 @@ enum ClassifierOutput: Equatable {
 final class PostureClassifier {
     static let requiredCalibrationSamples = 20
 
+    private static let maximumCalibrationGap: TimeInterval = 0.75
+    private static let maximumCalibrationHeadYRange = 0.035
+    private static let maximumCalibrationHeadSizeRange = 0.025
+    private static let maximumHeadYDeviation = 0.015
+    private static let maximumHeadSizeDeviation = 0.0125
+
     private(set) var baseline: CalibrationBaseline?
 
     private var calibrationSamples: [PostureFeatures] = []
+    private var lastCalibrationSampleAt: Date?
     private var smoothedScore: Double?
     private var slouchingSampleCount = 0
     private var uprightSampleCount = 0
     private var isSlouching = false
 
     init(baseline: CalibrationBaseline? = nil) {
-        self.baseline = baseline
+        self.baseline = Self.sanitizedBaseline(baseline)
+        calibrationSamples.reserveCapacity(Self.requiredCalibrationSamples)
     }
 
     func setBaseline(_ baseline: CalibrationBaseline?) {
-        self.baseline = baseline
+        self.baseline = Self.sanitizedBaseline(baseline)
         resetTransientState()
-        calibrationSamples.removeAll(keepingCapacity: true)
+        resetCalibrationProgress()
     }
 
     func recalibrate() {
         baseline = nil
-        calibrationSamples.removeAll(keepingCapacity: true)
+        resetCalibrationProgress()
         resetTransientState()
     }
 
     func consume(_ features: PostureFeatures) -> ClassifierOutput {
+        consume(features, calibrationTime: nil)
+    }
+
+    func consume(_ features: PostureFeatures, at date: Date) -> ClassifierOutput {
+        consume(features, calibrationTime: date)
+    }
+
+    private func consume(
+        _ features: PostureFeatures,
+        calibrationTime: Date?
+    ) -> ClassifierOutput {
         guard let baseline else {
-            calibrationSamples.append(features)
-
-            guard calibrationSamples.count >= Self.requiredCalibrationSamples else {
-                return .calibrating(
-                    collected: calibrationSamples.count,
-                    required: Self.requiredCalibrationSamples
-                )
-            }
-
-            self.baseline = Self.makeBaseline(from: calibrationSamples)
-            calibrationSamples.removeAll(keepingCapacity: false)
-            resetTransientState()
-            return .classified(isSlouching: false, score: 0, didCalibrate: true)
+            return consumeCalibrationSample(
+                features,
+                at: calibrationTime ?? Date()
+            )
         }
 
         let rawScore = Self.slouchScore(features: features, baseline: baseline)
@@ -104,15 +114,116 @@ final class PostureClassifier {
         isSlouching = false
     }
 
+    private func consumeCalibrationSample(
+        _ features: PostureFeatures,
+        at date: Date
+    ) -> ClassifierOutput {
+        guard Self.isPlausible(features) else {
+            resetCalibrationProgress()
+            return calibrationProgress
+        }
+
+        if let lastCalibrationSampleAt {
+            let gap = date.timeIntervalSince(lastCalibrationSampleAt)
+            if gap < 0 || gap > Self.maximumCalibrationGap {
+                resetCalibrationProgress()
+            }
+        }
+        lastCalibrationSampleAt = date
+
+        calibrationSamples.append(features)
+        if !Self.isStable(calibrationSamples) {
+            // The newest observation becomes the start of a fresh window. This
+            // avoids mixing two different seated positions into one baseline.
+            calibrationSamples = [features]
+        }
+
+        guard calibrationSamples.count >= Self.requiredCalibrationSamples else {
+            return calibrationProgress
+        }
+
+        self.baseline = Self.makeBaseline(from: calibrationSamples)
+        resetCalibrationProgress()
+        resetTransientState()
+        return .classified(isSlouching: false, score: 0, didCalibrate: true)
+    }
+
+    private var calibrationProgress: ClassifierOutput {
+        .calibrating(
+            collected: calibrationSamples.count,
+            required: Self.requiredCalibrationSamples
+        )
+    }
+
+    private func resetCalibrationProgress() {
+        calibrationSamples.removeAll(keepingCapacity: true)
+        lastCalibrationSampleAt = nil
+    }
+
+    private static func isPlausible(_ features: PostureFeatures) -> Bool {
+        features.headY.isFinite
+            && (0...1).contains(features.headY)
+            && features.headSize.isFinite
+            && (0.04...1).contains(features.headSize)
+    }
+
+    private static func isStable(_ samples: [PostureFeatures]) -> Bool {
+        guard let first = samples.first else { return true }
+
+        var minimumHeadY = first.headY
+        var maximumHeadY = first.headY
+        var minimumHeadSize = first.headSize
+        var maximumHeadSize = first.headSize
+
+        for sample in samples.dropFirst() {
+            minimumHeadY = min(minimumHeadY, sample.headY)
+            maximumHeadY = max(maximumHeadY, sample.headY)
+            minimumHeadSize = min(minimumHeadSize, sample.headSize)
+            maximumHeadSize = max(maximumHeadSize, sample.headSize)
+        }
+
+        return maximumHeadY - minimumHeadY <= maximumCalibrationHeadYRange
+            && maximumHeadSize - minimumHeadSize <= maximumCalibrationHeadSizeRange
+    }
+
     private static func makeBaseline(from samples: [PostureFeatures]) -> CalibrationBaseline {
         let headPositions = samples.map(\.headY)
         let headSizes = samples.map(\.headSize)
 
         return CalibrationBaseline(
-            headY: headPositions.mean,
-            headYDeviation: headPositions.standardDeviation,
-            headSize: headSizes.mean,
-            headSizeDeviation: headSizes.standardDeviation
+            headY: headPositions.median,
+            headYDeviation: min(
+                headPositions.medianAbsoluteDeviation * 1.4826,
+                maximumHeadYDeviation
+            ),
+            headSize: headSizes.median,
+            headSizeDeviation: min(
+                headSizes.medianAbsoluteDeviation * 1.4826,
+                maximumHeadSizeDeviation
+            )
+        )
+    }
+
+    private static func sanitizedBaseline(
+        _ baseline: CalibrationBaseline?
+    ) -> CalibrationBaseline? {
+        guard let baseline,
+              baseline.headY.isFinite,
+              (0...1).contains(baseline.headY),
+              baseline.headSize.isFinite,
+              (0.04...1).contains(baseline.headSize),
+              baseline.headYDeviation.isFinite,
+              baseline.headYDeviation >= 0,
+              baseline.headSizeDeviation.isFinite,
+              baseline.headSizeDeviation >= 0 else {
+            return nil
+        }
+
+        return CalibrationBaseline(
+            headY: baseline.headY,
+            headYDeviation: min(baseline.headYDeviation, maximumHeadYDeviation),
+            headSize: baseline.headSize,
+            headSizeDeviation: min(baseline.headSizeDeviation, maximumHeadSizeDeviation)
         )
     }
 
@@ -134,17 +245,18 @@ final class PostureClassifier {
 }
 
 private extension Array where Element == Double {
-    var mean: Double {
+    var median: Double {
         guard !isEmpty else { return 0 }
-        return reduce(0, +) / Double(count)
+        let values = sorted()
+        let middle = values.count / 2
+        if values.count.isMultiple(of: 2) {
+            return (values[middle - 1] + values[middle]) / 2
+        }
+        return values[middle]
     }
 
-    var standardDeviation: Double {
-        guard count > 1 else { return 0 }
-        let average = mean
-        let variance = reduce(0) { partial, value in
-            partial + pow(value - average, 2)
-        } / Double(count)
-        return sqrt(variance)
+    var medianAbsoluteDeviation: Double {
+        let center = median
+        return map { abs($0 - center) }.median
     }
 }

@@ -36,12 +36,64 @@ struct ClassifierSmoke {
         }
         precondition(!hasRecovered, "Sustained upright posture should recover")
 
+        testCalibrationRejectsMovement()
         testAlertVolumeRamp()
         testStalePostureStopsAlerts()
         testPostureHistory()
         testCameraPreference()
 
         print("PostureBar smoke tests passed")
+    }
+
+    private static func testCalibrationRejectsMovement() {
+        let classifier = PostureClassifier()
+
+        for _ in 0..<10 {
+            _ = classifier.consume(PostureFeatures(headY: 0.62, headSize: 0.20))
+        }
+
+        let reset = classifier.consume(PostureFeatures(headY: 0.50, headSize: 0.28))
+        precondition(
+            reset == .calibrating(
+                collected: 1,
+                required: PostureClassifier.requiredCalibrationSamples
+            ),
+            "Movement should restart calibration instead of polluting the baseline"
+        )
+
+        for _ in 0..<PostureClassifier.requiredCalibrationSamples {
+            _ = classifier.consume(PostureFeatures(headY: 0.62, headSize: 0.20))
+        }
+        precondition(classifier.baseline?.headY == 0.62)
+        precondition(classifier.baseline?.headSize == 0.20)
+
+        let staleClassifier = PostureClassifier()
+        let start = Date(timeIntervalSinceReferenceDate: 30_000)
+        for offset in 0..<10 {
+            _ = staleClassifier.consume(
+                PostureFeatures(headY: 0.62, headSize: 0.20),
+                at: start.addingTimeInterval(Double(offset) * 0.2)
+            )
+        }
+        precondition(
+            staleClassifier.consume(
+                PostureFeatures(headY: 0.62, headSize: 0.20),
+                at: start.addingTimeInterval(3)
+            ) == .calibrating(
+                collected: 1,
+                required: PostureClassifier.requiredCalibrationSamples
+            ),
+            "A stale camera feed should restart calibration"
+        )
+
+        let repairedClassifier = PostureClassifier(baseline: CalibrationBaseline(
+            headY: 0.62,
+            headYDeviation: 0.5,
+            headSize: 0.20,
+            headSizeDeviation: 0.5
+        ))
+        precondition(repairedClassifier.baseline?.headYDeviation == 0.015)
+        precondition(repairedClassifier.baseline?.headSizeDeviation == 0.0125)
     }
 
     private static func testCameraPreference() {

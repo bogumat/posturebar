@@ -27,6 +27,70 @@ final class PostureClassifierTests: XCTestCase {
         XCTAssertNotNil(classifier.baseline)
     }
 
+    func testMovementRestartsCalibration() {
+        let classifier = PostureClassifier()
+
+        for _ in 0..<10 {
+            _ = classifier.consume(upright)
+        }
+
+        XCTAssertEqual(
+            classifier.consume(PostureFeatures(headY: 0.50, headSize: 0.28)),
+            .calibrating(
+                collected: 1,
+                required: PostureClassifier.requiredCalibrationSamples
+            )
+        )
+        XCTAssertNil(classifier.baseline)
+    }
+
+    func testCalibrationGapRestartsCalibration() {
+        let classifier = PostureClassifier()
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        for offset in 0..<10 {
+            _ = classifier.consume(
+                upright,
+                at: start.addingTimeInterval(Double(offset) * 0.2)
+            )
+        }
+
+        XCTAssertEqual(
+            classifier.consume(upright, at: start.addingTimeInterval(3)),
+            .calibrating(
+                collected: 1,
+                required: PostureClassifier.requiredCalibrationSamples
+            )
+        )
+    }
+
+    func testInvalidCalibrationSampleClearsProgress() {
+        let classifier = PostureClassifier()
+        for _ in 0..<10 {
+            _ = classifier.consume(upright)
+        }
+
+        XCTAssertEqual(
+            classifier.consume(PostureFeatures(headY: .nan, headSize: 0.20)),
+            .calibrating(
+                collected: 0,
+                required: PostureClassifier.requiredCalibrationSamples
+            )
+        )
+    }
+
+    func testLoadedBaselineDeviationIsBounded() {
+        let classifier = PostureClassifier(baseline: CalibrationBaseline(
+            headY: upright.headY,
+            headYDeviation: 0.5,
+            headSize: upright.headSize,
+            headSizeDeviation: 0.5
+        ))
+
+        XCTAssertEqual(classifier.baseline?.headYDeviation, 0.015)
+        XCTAssertEqual(classifier.baseline?.headSizeDeviation, 0.0125)
+    }
+
     func testSustainedSlouchChangesState() {
         let classifier = calibratedClassifier()
         let slouch = PostureFeatures(

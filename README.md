@@ -30,8 +30,9 @@ This exception is needed only once. See [Apple's instructions for opening an
 app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
 
 When asked for camera access, click **Allow**. Sit upright and reasonably still
-for about four seconds while PostureBar calibrates. Its icon will then appear
-in the menu bar.
+for about four seconds while PostureBar calibrates. Calibration progress
+restarts if you move significantly or the camera feed pauses, so it cannot save
+a noisy baseline. Its icon will then appear in the menu bar.
 
 On first launch, PostureBar prefers a plugged-in external webcam regardless of
 brand, then falls back to the first available camera. A camera chosen from the
