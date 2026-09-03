@@ -37,6 +37,7 @@ struct ClassifierSmoke {
         precondition(!hasRecovered, "Sustained upright posture should recover")
 
         testAlertVolumeRamp()
+        testStalePostureStopsAlerts()
         testPostureHistory()
         testCameraPreference()
 
@@ -97,6 +98,38 @@ struct ClassifierSmoke {
                 ) != nil
             )
         }
+    }
+
+    private static func testStalePostureStopsAlerts() {
+        let start = Date(timeIntervalSinceReferenceDate: 20_000)
+        var tracker = PostureAlertTracker()
+
+        tracker.observeBadPosture(at: start)
+        tracker.observeBadPosture(at: start.addingTimeInterval(0.8))
+        precondition(
+            tracker.nextVolume(
+                at: start.addingTimeInterval(1),
+                delay: .oneSecond
+            ) != nil,
+            "Fresh bad-posture observations should allow an alert"
+        )
+
+        precondition(
+            tracker.nextVolume(
+                at: start.addingTimeInterval(2.31),
+                delay: .oneSecond
+            ) == nil,
+            "A stale posture observation must stop alerts"
+        )
+
+        tracker.observeBadPosture(at: start.addingTimeInterval(2.4))
+        precondition(
+            tracker.nextVolume(
+                at: start.addingTimeInterval(3.39),
+                delay: .oneSecond
+            ) == nil,
+            "Fresh observations after a gap must start a new delay"
+        )
     }
 
     private static func testPostureHistory() {

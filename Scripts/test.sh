@@ -25,6 +25,7 @@ swiftc \
     "$PROJECT_ROOT/Sources/PostureBar/CameraSelectionPolicy.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureClassifier.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureAlertPolicy.swift" \
+    "$PROJECT_ROOT/Sources/PostureBar/PostureAlertTracker.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureHistoryStore.swift" \
     "$PROJECT_ROOT/Tests/Smoke/ClassifierSmoke.swift"
 

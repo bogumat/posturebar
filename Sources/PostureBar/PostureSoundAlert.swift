@@ -4,8 +4,7 @@ final class PostureSoundAlert {
     private let defaults: UserDefaults
     private let enabledKey = "soundAlertsEnabled"
     private let delayKey = "soundAlertDelaySeconds"
-    private var badPostureStartedAt: Date?
-    private var lastBeepAt: Date?
+    private var tracker = PostureAlertTracker()
 
     private lazy var alertSound: NSSound? = {
         BuzzerSoundFactory.makeSound()
@@ -39,7 +38,7 @@ final class PostureSoundAlert {
     func setDelay(_ delay: PostureAlertDelay) {
         self.delay = delay
         defaults.set(delay.rawValue, forKey: delayKey)
-        lastBeepAt = nil
+        tracker.resetAlertCadence()
     }
 
     func update(isBadPosture: Bool, at date: Date = Date()) {
@@ -49,10 +48,7 @@ final class PostureSoundAlert {
         }
 
         if isBadPosture {
-            if badPostureStartedAt == nil {
-                badPostureStartedAt = date
-                lastBeepAt = nil
-            }
+            tracker.observeBadPosture(at: date)
         } else {
             reset()
         }
@@ -60,28 +56,17 @@ final class PostureSoundAlert {
 
     func tick(at date: Date = Date()) {
         guard isEnabled,
-              let badPostureStartedAt,
-              let volume = PostureAlertPolicy.volume(
-                  afterBadPosture: date.timeIntervalSince(badPostureStartedAt),
-                  initialDelay: delay.duration
-              ) else {
+              let volume = tracker.nextVolume(at: date, delay: delay) else {
             return
         }
 
-        if let lastBeepAt,
-           date.timeIntervalSince(lastBeepAt) < PostureAlertPolicy.beepInterval {
-            return
-        }
-
-        lastBeepAt = date
         alertSound?.stop()
         alertSound?.volume = volume
         alertSound?.play()
     }
 
     func reset() {
-        badPostureStartedAt = nil
-        lastBeepAt = nil
+        tracker.reset()
         alertSound?.stop()
     }
 }
