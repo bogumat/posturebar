@@ -1,7 +1,7 @@
 import AppKit
 
 enum StatusIconFactory {
-    private static let goodImage = checkmark(color: .systemGreen)
+    private static let goodImage = sprout(color: .systemGreen)
     private static let slouchingImage = spiral(color: .systemRed)
     private static let calibratingImage = ring(color: .systemOrange)
     private static let errorImage = ring(color: .systemRed)
@@ -22,17 +22,50 @@ enum StatusIconFactory {
         }
     }
 
-    private static func checkmark(color: NSColor) -> NSImage {
+    private static func sprout(color: NSColor) -> NSImage {
         drawImage { _ in
             color.setStroke()
-            let path = NSBezierPath()
-            path.lineWidth = 2.4
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.move(to: NSPoint(x: 3.2, y: 9.0))
-            path.line(to: NSPoint(x: 7.2, y: 5.0))
-            path.line(to: NSPoint(x: 14.8, y: 13.2))
-            path.stroke()
+            let stem = NSBezierPath()
+            stem.lineWidth = 2.1
+            stem.lineCapStyle = .round
+            stem.move(to: NSPoint(x: 8.8, y: 2.5))
+            stem.curve(
+                to: NSPoint(x: 9.0, y: 11.0),
+                controlPoint1: NSPoint(x: 8.4, y: 5.4),
+                controlPoint2: NSPoint(x: 9.4, y: 8.4)
+            )
+            stem.stroke()
+
+            color.setFill()
+            let leftLeaf = NSBezierPath()
+            leftLeaf.move(to: NSPoint(x: 8.8, y: 9.3))
+            leftLeaf.curve(
+                to: NSPoint(x: 2.7, y: 13.9),
+                controlPoint1: NSPoint(x: 7.6, y: 12.1),
+                controlPoint2: NSPoint(x: 5.4, y: 14.2)
+            )
+            leftLeaf.curve(
+                to: NSPoint(x: 8.8, y: 9.3),
+                controlPoint1: NSPoint(x: 3.2, y: 10.8),
+                controlPoint2: NSPoint(x: 5.8, y: 8.7)
+            )
+            leftLeaf.close()
+            leftLeaf.fill()
+
+            let rightLeaf = NSBezierPath()
+            rightLeaf.move(to: NSPoint(x: 9.0, y: 10.9))
+            rightLeaf.curve(
+                to: NSPoint(x: 15.4, y: 14.1),
+                controlPoint1: NSPoint(x: 10.8, y: 13.8),
+                controlPoint2: NSPoint(x: 13.2, y: 15.0)
+            )
+            rightLeaf.curve(
+                to: NSPoint(x: 9.0, y: 10.9),
+                controlPoint1: NSPoint(x: 15.0, y: 11.2),
+                controlPoint2: NSPoint(x: 12.2, y: 9.6)
+            )
+            rightLeaf.close()
+            rightLeaf.fill()
         }
     }
 
