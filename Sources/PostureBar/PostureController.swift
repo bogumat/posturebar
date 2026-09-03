@@ -2,6 +2,30 @@ import AVFoundation
 import Foundation
 
 final class PostureController {
+    private struct CaptureAttempt: Equatable {
+        let cameraID: String
+        let generation: UInt64
+    }
+
+    private enum CaptureLifecycle {
+        case idle
+        case starting(CaptureAttempt)
+        case running(CaptureAttempt)
+        case retrying(until: Date)
+        case permissionDenied
+    }
+
+    private enum MonitoringMode {
+        case active
+        case pausedManually
+        case pausedUntil(Date)
+    }
+
+    private enum CallBlocker: Hashable {
+        case microphone
+        case camera
+    }
+
     private let cameraService = CameraCaptureService()
     private let microphoneMonitor = MicrophoneActivityMonitor()
     private let baselineStore = BaselineStore()
@@ -14,14 +38,11 @@ final class PostureController {
     private var selectedCameraID: String?
     private var selectedCameraName: String?
     private var displayState: PostureDisplayState = .starting
-    private var userPaused = false
-    private var pauseUntil: Date?
-    private var microphoneActive = false
-    private var cameraUsedElsewhere = false
-    private var captureRunning = false
-    private var permissionDenied = false
+    private var monitoringMode: MonitoringMode = .active
+    private var captureLifecycle: CaptureLifecycle = .idle
+    private var callBlockers: Set<CallBlocker> = []
+    private var captureGeneration: UInt64 = 0
     private var missingPoseCount = 0
-    private var nextRetryDate: Date?
     private var maintenanceTimer: Timer?
     private var maintenanceTickCount = 0
 
@@ -29,12 +50,12 @@ final class PostureController {
         cameraService.onEvent = { [weak self] event in
             self?.handleCameraEvent(event)
         }
-        cameraService.onPose = { [weak self] features in
-            self?.handlePose(features)
+        cameraService.onPose = { [weak self] generation, features in
+            self?.handlePose(features, generation: generation)
         }
         microphoneMonitor.onChange = { [weak self] isActive in
             guard let self else { return }
-            self.microphoneActive = isActive
+            self.setCallBlocker(.microphone, isActive: isActive)
             self.reevaluateCapture()
         }
 
@@ -86,15 +107,24 @@ final class PostureController {
     }
 
     func resumeMonitoring() {
-        userPaused = false
-        pauseUntil = nil
-        nextRetryDate = nil
+        monitoringMode = .active
+        if case .retrying = captureLifecycle {
+            captureLifecycle = .idle
+        }
         reevaluateCapture()
     }
 
     private func refreshCameras() {
         let previousCameraID = selectedCameraID
         cameras = CameraCaptureService.availableCameras()
+
+        if let selectedCameraID,
+           !cameras.contains(where: { $0.id == selectedCameraID }) {
+            invalidateCapture()
+            self.selectedCameraID = nil
+            selectedCameraName = nil
+            callBlockers.remove(.camera)
+        }
 
         if selectedCameraID == nil {
             let savedID = baselineStore.selectedCameraID
@@ -127,34 +157,33 @@ final class PostureController {
             return
         }
 
-        cameraService.stop()
+        invalidateCapture()
         selectedCameraID = descriptor.id
         selectedCameraName = descriptor.name
         baselineStore.selectedCameraID = descriptor.id
         classifier.setBaseline(baselineStore.baseline(for: descriptor.id))
-        captureRunning = false
-        cameraUsedElsewhere = false
-        permissionDenied = false
-        nextRetryDate = Date().addingTimeInterval(0.5)
+        callBlockers.remove(.camera)
+        captureLifecycle = .retrying(until: Date().addingTimeInterval(0.5))
         missingPoseCount = 0
         statusBar.updateCameras(cameras, selectedCameraID: selectedCameraID)
         updateDisplay(.starting)
     }
 
     private func toggleMonitoring() {
-        if userPaused || pauseUntil != nil {
-            userPaused = false
-            pauseUntil = nil
-            nextRetryDate = nil
-        } else {
-            userPaused = true
+        switch monitoringMode {
+        case .active:
+            monitoringMode = .pausedManually
+        case .pausedManually, .pausedUntil:
+            monitoringMode = .active
+            if case .retrying = captureLifecycle {
+                captureLifecycle = .idle
+            }
         }
         reevaluateCapture()
     }
 
     private func pauseForThirtyMinutes() {
-        userPaused = false
-        pauseUntil = Date().addingTimeInterval(30 * 60)
+        monitoringMode = .pausedUntil(Date().addingTimeInterval(30 * 60))
         reevaluateCapture()
     }
 
@@ -193,19 +222,20 @@ final class PostureController {
         maintenanceTickCount += 1
         soundAlert.tick()
 
-        if let pauseUntil, pauseUntil <= Date() {
-            self.pauseUntil = nil
-            nextRetryDate = nil
+        if case let .pausedUntil(date) = monitoringMode, date <= Date() {
+            monitoringMode = .active
+            if case .retrying = captureLifecycle {
+                captureLifecycle = .idle
+            }
         }
 
         if maintenanceTickCount.isMultiple(of: 10) {
             refreshCamerasIfSelectionDisappeared()
         }
 
-        if permissionDenied,
+        if case .permissionDenied = captureLifecycle,
            AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
-            permissionDenied = false
-            nextRetryDate = nil
+            captureLifecycle = .idle
         }
 
         reevaluateCapture()
@@ -216,83 +246,130 @@ final class PostureController {
                 || !CameraCaptureService.availableCameras().contains(where: { $0.id == selectedCameraID }) else {
             return
         }
-        selectedCameraID = nil
         refreshCameras()
     }
 
     private var captureIsAllowed: Bool {
-        guard !userPaused,
-              pauseUntil == nil,
-              !microphoneActive,
-              !cameraUsedElsewhere,
-              !permissionDenied,
-              selectedCameraID != nil else {
+        guard case .active = monitoringMode,
+              callBlockers.isEmpty,
+              selectedCameraID != nil,
+              case .running = captureLifecycle else {
             return false
         }
         return true
     }
 
     private func reevaluateCapture() {
-        if userPaused {
-            cameraService.stop()
-            captureRunning = false
+        switch monitoringMode {
+        case .pausedManually:
+            stopCaptureIfNeeded()
             updateDisplay(.pausedManually)
             return
-        }
-
-        if let pauseUntil, pauseUntil > Date() {
-            cameraService.stop()
-            captureRunning = false
-            updateDisplay(.pausedUntil(pauseUntil))
+        case let .pausedUntil(date) where date > Date():
+            stopCaptureIfNeeded()
+            updateDisplay(.pausedUntil(date))
             return
+        case .pausedUntil:
+            monitoringMode = .active
+        case .active:
+            break
         }
 
-        if microphoneActive || cameraUsedElsewhere {
-            cameraService.stop()
-            captureRunning = false
+        if !callBlockers.isEmpty {
+            stopCaptureIfNeeded()
             updateDisplay(.pausedForCall)
             return
         }
 
-        if permissionDenied {
-            cameraService.stop()
-            captureRunning = false
+        if case .permissionDenied = captureLifecycle {
             updateDisplay(.cameraPermissionDenied)
             return
         }
 
         guard let selectedCameraID else {
-            cameraService.stop()
-            captureRunning = false
+            stopCaptureIfNeeded()
             updateDisplay(.cameraUnavailable)
             return
         }
 
-        if let nextRetryDate, nextRetryDate > Date() {
+        if case let .retrying(until) = captureLifecycle {
+            guard until <= Date() else { return }
+            captureLifecycle = .idle
+        }
+
+        switch captureLifecycle {
+        case let .starting(attempt), let .running(attempt):
+            guard attempt.cameraID != selectedCameraID else { return }
+            invalidateCapture()
+        case .idle, .retrying:
+            break
+        case .permissionDenied:
             return
         }
 
-        if !captureRunning {
-            updateDisplay(.starting)
-            cameraService.start(cameraID: selectedCameraID)
+        captureGeneration &+= 1
+        let attempt = CaptureAttempt(
+            cameraID: selectedCameraID,
+            generation: captureGeneration
+        )
+        captureLifecycle = .starting(attempt)
+        updateDisplay(.starting)
+        cameraService.start(
+            cameraID: selectedCameraID,
+            generation: attempt.generation
+        )
+    }
+
+    private func stopCaptureIfNeeded() {
+        switch captureLifecycle {
+        case .starting, .running:
+            cameraService.stop()
+            captureLifecycle = .idle
+        case .retrying:
+            captureLifecycle = .idle
+        case .idle, .permissionDenied:
+            break
         }
     }
 
+    private func invalidateCapture() {
+        cameraService.stop()
+        captureGeneration &+= 1
+        captureLifecycle = .idle
+    }
+
+    private func setCallBlocker(_ blocker: CallBlocker, isActive: Bool) {
+        if isActive {
+            callBlockers.insert(blocker)
+        } else {
+            callBlockers.remove(blocker)
+        }
+    }
+
+    private func scheduleRetry(after delay: TimeInterval) {
+        captureLifecycle = .retrying(until: Date().addingTimeInterval(delay))
+    }
+
     private func handleCameraEvent(_ event: CameraEvent) {
-        switch event {
+        guard event.generation == captureGeneration else { return }
+
+        switch event.kind {
         case .authorizationDenied:
-            permissionDenied = true
-            captureRunning = false
+            guard case .starting = captureLifecycle else { return }
+            captureLifecycle = .permissionDenied
             updateDisplay(.cameraPermissionDenied)
         case .unavailable:
-            captureRunning = false
-            nextRetryDate = Date().addingTimeInterval(5)
+            guard case .starting = captureLifecycle else { return }
+            scheduleRetry(after: 5)
             updateDisplay(.cameraUnavailable)
         case let .started(camera):
-            captureRunning = true
+            guard case let .starting(attempt) = captureLifecycle,
+                  attempt.cameraID == camera.id else {
+                return
+            }
+            captureLifecycle = .running(attempt)
             selectedCameraName = camera.name
-            cameraUsedElsewhere = false
-            nextRetryDate = nil
+            callBlockers.remove(.camera)
             missingPoseCount = 0
             if classifier.baseline == nil {
                 updateDisplay(.calibrating(
@@ -303,33 +380,50 @@ final class PostureController {
                 updateDisplay(.noPose)
             }
         case .stopped:
-            captureRunning = false
+            if case .starting = captureLifecycle {
+                captureLifecycle = .idle
+            } else if case .running = captureLifecycle {
+                captureLifecycle = .idle
+            }
         case .interrupted:
-            captureRunning = false
-            cameraUsedElsewhere = true
-            cameraService.stop()
+            guard isCaptureActive else { return }
+            setCallBlocker(.camera, isActive: true)
+            stopCaptureIfNeeded()
             updateDisplay(.pausedForCall)
         case .interruptionEnded:
-            cameraUsedElsewhere = false
-            nextRetryDate = Date().addingTimeInterval(1)
+            setCallBlocker(.camera, isActive: false)
+            scheduleRetry(after: 1)
         case let .externalUseChanged(isUsedElsewhere):
-            cameraUsedElsewhere = isUsedElsewhere
+            let wasBlocked = callBlockers.contains(.camera)
+            setCallBlocker(.camera, isActive: isUsedElsewhere)
             if isUsedElsewhere {
-                captureRunning = false
-                cameraService.stop()
-            } else {
-                nextRetryDate = Date().addingTimeInterval(1)
+                stopCaptureIfNeeded()
+            } else if wasBlocked {
+                scheduleRetry(after: 1)
             }
             reevaluateCapture()
         case let .failed(message):
-            captureRunning = false
-            nextRetryDate = Date().addingTimeInterval(5)
+            guard isCaptureActive else { return }
+            cameraService.stop()
+            scheduleRetry(after: 5)
             updateDisplay(.error(message))
         }
     }
 
-    private func handlePose(_ features: PostureFeatures?) {
-        guard captureRunning, captureIsAllowed else { return }
+    private var isCaptureActive: Bool {
+        switch captureLifecycle {
+        case .starting, .running:
+            return true
+        case .idle, .retrying, .permissionDenied:
+            return false
+        }
+    }
+
+    private func handlePose(_ features: PostureFeatures?, generation: UInt64) {
+        guard generation == captureGeneration,
+              captureIsAllowed else {
+            return
+        }
 
         guard let features else {
             missingPoseCount += 1

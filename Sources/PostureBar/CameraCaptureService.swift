@@ -2,7 +2,7 @@ import AVFoundation
 import CoreVideo
 import Foundation
 
-enum CameraEvent {
+enum CameraEventKind {
     case authorizationDenied
     case unavailable
     case started(CameraDescriptor)
@@ -13,12 +13,22 @@ enum CameraEvent {
     case failed(String)
 }
 
+struct CameraEvent {
+    let generation: UInt64
+    let kind: CameraEventKind
+}
+
 final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private struct CaptureRequest: Equatable {
+        let cameraID: String
+        let generation: UInt64
+    }
+
     private static let captureFramesPerSecond: Int32 = 10
     private static let analysisInterval: TimeInterval = 0.20
 
     var onEvent: ((CameraEvent) -> Void)?
-    var onPose: ((PostureFeatures?) -> Void)?
+    var onPose: ((UInt64, PostureFeatures?) -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "PostureBar.capture.session")
     private let sampleQueue = DispatchQueue(
@@ -36,38 +46,43 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var selectedDescriptor: CameraDescriptor?
     private var deviceUseObservation: NSKeyValueObservation?
     private var notificationTokens: [NSObjectProtocol] = []
-    private var requestedCameraID: String?
-    private var wantsToRun = false
+    private var requestedCapture: CaptureRequest?
+    private var sessionGeneration: UInt64 = 0
+    private var frameGeneration: UInt64 = 0
     private var lastAnalysisTime: TimeInterval = 0
 
     static func availableCameras() -> [CameraDescriptor] {
         discoverySession().devices.map(makeDescriptor)
     }
 
-    func start(cameraID: String) {
+    func start(cameraID: String, generation: UInt64) {
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            self.wantsToRun = true
-            self.requestedCameraID = cameraID
-            self.startAfterAuthorization()
+            let request = CaptureRequest(cameraID: cameraID, generation: generation)
+            guard self.requestedCapture != request || self.session?.isRunning != true else {
+                return
+            }
+            self.requestedCapture = request
+            self.startAfterAuthorization(request)
         }
     }
 
     func stop() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            guard self.wantsToRun || self.session?.isRunning == true else { return }
-            self.wantsToRun = false
+            guard self.requestedCapture != nil || self.session?.isRunning == true else { return }
+            let generation = self.requestedCapture?.generation ?? self.sessionGeneration
+            self.requestedCapture = nil
             if self.session?.isRunning == true {
                 self.session?.stopRunning()
             }
-            self.emit(.stopped)
+            self.emit(.stopped, generation: generation)
         }
     }
 
     func shutdown() {
         sessionQueue.sync {
-            wantsToRun = false
+            requestedCapture = nil
             if session?.isRunning == true {
                 session?.stopRunning()
             }
@@ -79,74 +94,85 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
-    private func startAfterAuthorization() {
+    private func startAfterAuthorization(_ request: CaptureRequest) {
+        guard requestedCapture == request else { return }
+
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            startConfiguredSession()
+            startConfiguredSession(request)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 self?.sessionQueue.async {
-                    guard let self, self.wantsToRun else { return }
+                    guard let self, self.requestedCapture == request else { return }
                     if granted {
-                        self.startConfiguredSession()
+                        self.startConfiguredSession(request)
                     } else {
-                        self.wantsToRun = false
-                        self.emit(.authorizationDenied)
+                        self.requestedCapture = nil
+                        self.emit(.authorizationDenied, generation: request.generation)
                     }
                 }
             }
         case .denied, .restricted:
-            wantsToRun = false
-            emit(.authorizationDenied)
+            requestedCapture = nil
+            emit(.authorizationDenied, generation: request.generation)
         @unknown default:
-            wantsToRun = false
-            emit(.authorizationDenied)
+            requestedCapture = nil
+            emit(.authorizationDenied, generation: request.generation)
         }
     }
 
-    private func startConfiguredSession() {
-        guard wantsToRun, let requestedCameraID else { return }
+    private func startConfiguredSession(_ request: CaptureRequest) {
+        guard requestedCapture == request else { return }
 
-        if selectedDevice?.uniqueID != requestedCameraID || session == nil {
-            guard configureSession(cameraID: requestedCameraID) else { return }
+        if selectedDevice?.uniqueID != request.cameraID || session == nil {
+            guard configureSession(for: request) else { return }
+        } else {
+            prepareFrameProcessing(generation: request.generation)
+            removeSessionObservers()
+            deviceUseObservation = nil
+            if let device = selectedDevice, let session {
+                observeDeviceUse(device, generation: request.generation)
+                observeSession(session, generation: request.generation)
+            }
         }
 
         guard let device = selectedDevice,
               let session,
               let descriptor = selectedDescriptor else {
-            wantsToRun = false
-            emit(.unavailable)
+            requestedCapture = nil
+            emit(.unavailable, generation: request.generation)
             return
         }
 
         guard !device.isInUseByAnotherApplication else {
-            wantsToRun = false
-            emit(.externalUseChanged(true))
+            requestedCapture = nil
+            emit(.externalUseChanged(true), generation: request.generation)
             return
         }
 
         guard !session.isRunning else { return }
-        lastAnalysisTime = 0
         session.startRunning()
 
         if session.isRunning {
-            emit(.started(descriptor))
+            emit(.started(descriptor), generation: request.generation)
         } else {
-            wantsToRun = false
-            emit(.failed("The camera did not start"))
+            requestedCapture = nil
+            emit(.failed("The camera did not start"), generation: request.generation)
         }
     }
 
-    private func configureSession(cameraID: String) -> Bool {
+    private func configureSession(for request: CaptureRequest) -> Bool {
         if session?.isRunning == true {
             session?.stopRunning()
         }
         removeSessionObservers()
         deviceUseObservation = nil
 
-        guard let device = Self.discoverySession().devices.first(where: { $0.uniqueID == cameraID }) else {
-            wantsToRun = false
-            emit(.unavailable)
+        guard let device = Self.discoverySession().devices.first(where: {
+            $0.uniqueID == request.cameraID
+        }) else {
+            requestedCapture = nil
+            emit(.unavailable, generation: request.generation)
             return false
         }
 
@@ -167,8 +193,11 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             }
             guard newSession.canAddInput(input), newSession.canAddOutput(output) else {
                 newSession.commitConfiguration()
-                wantsToRun = false
-                emit(.failed("The selected camera does not support video capture"))
+                requestedCapture = nil
+                emit(
+                    .failed("The selected camera does not support video capture"),
+                    generation: request.generation
+                )
                 return false
             }
             newSession.addInput(input)
@@ -190,27 +219,36 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             selectedDevice = device
             selectedDescriptor = descriptor
             session = newSession
-            observeDeviceUse(device)
-            observeSession(newSession)
+            prepareFrameProcessing(generation: request.generation)
+            observeDeviceUse(device, generation: request.generation)
+            observeSession(newSession, generation: request.generation)
             return true
         } catch {
-            wantsToRun = false
-            emit(.failed(error.localizedDescription))
+            requestedCapture = nil
+            emit(.failed(error.localizedDescription), generation: request.generation)
             return false
         }
     }
 
-    private func observeDeviceUse(_ device: AVCaptureDevice) {
+    private func prepareFrameProcessing(generation: UInt64) {
+        sessionGeneration = generation
+        sampleQueue.sync {
+            frameGeneration = generation
+            lastAnalysisTime = 0
+        }
+    }
+
+    private func observeDeviceUse(_ device: AVCaptureDevice, generation: UInt64) {
         deviceUseObservation = device.observe(
             \.isInUseByAnotherApplication,
             options: [.initial, .new]
         ) { [weak self] _, change in
             guard let isUsedElsewhere = change.newValue else { return }
-            self?.emit(.externalUseChanged(isUsedElsewhere))
+            self?.emit(.externalUseChanged(isUsedElsewhere), generation: generation)
         }
     }
 
-    private func observeSession(_ session: AVCaptureSession) {
+    private func observeSession(_ session: AVCaptureSession, generation: UInt64) {
         let center = NotificationCenter.default
 
         notificationTokens.append(center.addObserver(
@@ -218,7 +256,7 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             object: session,
             queue: nil
         ) { [weak self] _ in
-            self?.emit(.interrupted)
+            self?.emit(.interrupted, generation: generation)
         })
 
         notificationTokens.append(center.addObserver(
@@ -226,7 +264,7 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             object: session,
             queue: nil
         ) { [weak self] _ in
-            self?.emit(.interruptionEnded)
+            self?.emit(.interruptionEnded, generation: generation)
         })
 
         notificationTokens.append(center.addObserver(
@@ -235,7 +273,10 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             queue: nil
         ) { [weak self] notification in
             let error = notification.userInfo?[AVCaptureSessionErrorKey] as? Error
-            self?.emit(.failed(error?.localizedDescription ?? "Camera runtime error"))
+            self?.emit(
+                .failed(error?.localizedDescription ?? "Camera runtime error"),
+                generation: generation
+            )
         })
     }
 
@@ -245,9 +286,9 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         notificationTokens.removeAll(keepingCapacity: true)
     }
 
-    private func emit(_ event: CameraEvent) {
+    private func emit(_ kind: CameraEventKind, generation: UInt64) {
         DispatchQueue.main.async { [weak self] in
-            self?.onEvent?(event)
+            self?.onEvent?(CameraEvent(generation: generation, kind: kind))
         }
     }
 
@@ -293,9 +334,10 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
 
         lastAnalysisTime = now
+        let generation = frameGeneration
         let features = poseDetector.detect(in: pixelBuffer)
         DispatchQueue.main.async { [weak self] in
-            self?.onPose?(features)
+            self?.onPose?(generation, features)
         }
     }
 }
