@@ -23,8 +23,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let soundAlertDelayMenuItem = NSMenuItem(title: "Buzz After", action: nil, keyEquivalent: "")
     private let privacySettingsMenuItem = NSMenuItem(title: "Open Camera Privacy Settings…", action: #selector(openCameraPrivacySettings), keyEquivalent: "")
 
-    private var currentState: PostureDisplayState = .starting
-
     override init() {
         super.init()
 
@@ -85,12 +83,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func update(state: PostureDisplayState, cameraName: String?) {
-        currentState = state
-        statusMenuItem.title = state.title
+        let title = state.title
+        statusMenuItem.title = title
         cameraMenuItem.title = "Camera: \(cameraName ?? "None")"
         statusItem.button?.image = StatusIconFactory.image(for: state)
         statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.toolTip = state.title
+        statusItem.button?.toolTip = title
 
         switch state {
         case .pausedManually, .pausedUntil:

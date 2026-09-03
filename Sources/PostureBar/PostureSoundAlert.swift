@@ -5,12 +5,10 @@ final class PostureSoundAlert {
     private let enabledKey = "soundAlertsEnabled"
     private let delayKey = "soundAlertDelaySeconds"
     private var tracker = PostureAlertTracker()
+    private var alertTimer: Timer?
+    private var isTrackingBadPosture = false
 
-    private lazy var alertSound: NSSound? = {
-        BuzzerSoundFactory.makeSound()
-            ?? NSSound(named: NSSound.Name("Tink"))
-            ?? NSSound(named: NSSound.Name("Ping"))
-    }()
+    private var alertSound: NSSound?
 
     private(set) var isEnabled: Bool
     private(set) var delay: PostureAlertDelay
@@ -39,6 +37,9 @@ final class PostureSoundAlert {
         self.delay = delay
         defaults.set(delay.rawValue, forKey: delayKey)
         tracker.resetAlertCadence()
+        alertTimer?.invalidate()
+        alertTimer = nil
+        scheduleNextAlert()
     }
 
     func update(isBadPosture: Bool, at date: Date = Date()) {
@@ -48,25 +49,54 @@ final class PostureSoundAlert {
         }
 
         if isBadPosture {
+            isTrackingBadPosture = true
             tracker.observeBadPosture(at: date)
-        } else {
+            scheduleNextAlert()
+        } else if isTrackingBadPosture {
             reset()
         }
     }
 
-    func tick(at date: Date = Date()) {
+    func reset() {
+        guard isTrackingBadPosture || alertTimer != nil || alertSound?.isPlaying == true else {
+            return
+        }
+        isTrackingBadPosture = false
+        tracker.reset()
+        alertTimer?.invalidate()
+        alertTimer = nil
+        alertSound?.stop()
+    }
+
+    private func scheduleNextAlert() {
         guard isEnabled,
-              let volume = tracker.nextVolume(at: date, delay: delay) else {
+              alertTimer == nil,
+              let nextDate = tracker.nextAlertDate(delay: delay) else {
             return
         }
 
+        let timer = Timer(fireAt: nextDate, interval: 0, target: self,
+                          selector: #selector(fireAlert), userInfo: nil, repeats: false)
+        timer.tolerance = 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        alertTimer = timer
+    }
+
+    @objc private func fireAlert() {
+        alertTimer = nil
+        guard isEnabled,
+              let volume = tracker.nextVolume(at: Date(), delay: delay) else {
+            return
+        }
+
+        if alertSound == nil {
+            alertSound = BuzzerSoundFactory.makeSound()
+                ?? NSSound(named: NSSound.Name("Tink"))
+                ?? NSSound(named: NSSound.Name("Ping"))
+        }
         alertSound?.stop()
         alertSound?.volume = volume
         alertSound?.play()
-    }
-
-    func reset() {
-        tracker.reset()
-        alertSound?.stop()
+        scheduleNextAlert()
     }
 }

@@ -1,18 +1,24 @@
 import AppKit
 
 enum StatusIconFactory {
+    private static let goodImage = checkmark(color: .systemGreen)
+    private static let slouchingImage = spiral(color: .systemRed)
+    private static let calibratingImage = ring(color: .systemOrange)
+    private static let errorImage = ring(color: .systemRed)
+    private static let neutralImage = ring(color: .secondaryLabelColor)
+
     static func image(for state: PostureDisplayState) -> NSImage {
         switch state {
         case .good:
-            return checkmark(color: .systemGreen)
+            return goodImage
         case .slouching:
-            return spiral(color: .systemRed)
+            return slouchingImage
         case .calibrating:
-            return ring(color: .systemOrange)
+            return calibratingImage
         case .cameraPermissionDenied, .cameraUnavailable, .error:
-            return ring(color: .systemRed)
+            return errorImage
         default:
-            return ring(color: .secondaryLabelColor)
+            return neutralImage
         }
     }
 

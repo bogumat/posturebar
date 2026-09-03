@@ -60,6 +60,13 @@ struct PostureAlertTracker {
         lastAlertAt = nil
     }
 
+    func nextAlertDate(delay: PostureAlertDelay) -> Date? {
+        if let lastAlertAt {
+            return lastAlertAt.addingTimeInterval(PostureAlertPolicy.beepInterval)
+        }
+        return badPostureStartedAt?.addingTimeInterval(delay.duration)
+    }
+
     mutating func reset() {
         badPostureStartedAt = nil
         latestBadObservationAt = nil

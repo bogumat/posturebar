@@ -1,6 +1,6 @@
 import Foundation
 
-enum PostureDisplayState {
+enum PostureDisplayState: Equatable {
     case starting
     case calibrating(collected: Int, required: Int)
     case good
@@ -12,6 +12,13 @@ enum PostureDisplayState {
     case cameraPermissionDenied
     case cameraUnavailable
     case error(String)
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
 
     var title: String {
         switch self {
@@ -30,10 +37,7 @@ enum PostureDisplayState {
         case .pausedManually:
             return "Monitoring paused"
         case let .pausedUntil(date):
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            formatter.dateStyle = .none
-            return "Paused until \(formatter.string(from: date))"
+            return "Paused until \(Self.timeFormatter.string(from: date))"
         case .cameraPermissionDenied:
             return "Camera permission required"
         case .cameraUnavailable:

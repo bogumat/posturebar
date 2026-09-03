@@ -10,7 +10,9 @@ final class MicrophoneActivityMonitor {
     private let systemObject = AudioObjectID(kAudioObjectSystemObject)
     private var processListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
     private var processListListener: AudioObjectPropertyListenerBlock?
-    private var fallbackTimer: Timer?
+    private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var legacyInputListener: AudioObjectPropertyListenerBlock?
+    private var legacyInputDevice = kAudioObjectUnknown
     private var lastValue: Bool?
 
     func start() {
@@ -18,7 +20,7 @@ final class MicrophoneActivityMonitor {
 
         var processListAddress = Self.processListAddress
         guard AudioObjectHasProperty(systemObject, &processListAddress) else {
-            startFallbackPolling()
+            startLegacyDeviceMonitoring()
             return
         }
 
@@ -32,7 +34,7 @@ final class MicrophoneActivityMonitor {
             .main,
             listener
         ) == noErr else {
-            startFallbackPolling()
+            startLegacyDeviceMonitoring()
             return
         }
 
@@ -42,9 +44,6 @@ final class MicrophoneActivityMonitor {
     }
 
     func stop() {
-        fallbackTimer?.invalidate()
-        fallbackTimer = nil
-
         if let processListListener {
             var address = Self.processListAddress
             AudioObjectRemovePropertyListenerBlock(
@@ -66,6 +65,18 @@ final class MicrophoneActivityMonitor {
             )
         }
         processListeners.removeAll(keepingCapacity: false)
+
+        if let defaultInputListener {
+            var address = Self.defaultInputAddress
+            AudioObjectRemovePropertyListenerBlock(
+                systemObject,
+                &address,
+                .main,
+                defaultInputListener
+            )
+        }
+        defaultInputListener = nil
+        removeLegacyInputListener()
         lastValue = nil
     }
 
@@ -117,13 +128,66 @@ final class MicrophoneActivityMonitor {
         }
     }
 
-    private func startFallbackPolling() {
-        publishCurrentValue()
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+    private func startLegacyDeviceMonitoring() {
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.synchronizeLegacyInputListener()
             self?.publishCurrentValue()
         }
-        RunLoop.main.add(timer, forMode: .common)
-        fallbackTimer = timer
+        var address = Self.defaultInputAddress
+        if AudioObjectAddPropertyListenerBlock(
+            systemObject,
+            &address,
+            .main,
+            listener
+        ) == noErr {
+            defaultInputListener = listener
+        }
+
+        synchronizeLegacyInputListener()
+        publishCurrentValue()
+    }
+
+    private func synchronizeLegacyInputListener() {
+        var defaultInputAddress = Self.defaultInputAddress
+        let inputDevice = Self.audioObjectIDValue(
+            object: systemObject,
+            address: &defaultInputAddress
+        ) ?? kAudioObjectUnknown
+        guard inputDevice != legacyInputDevice else { return }
+
+        removeLegacyInputListener()
+        guard inputDevice != kAudioObjectUnknown else { return }
+
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.publishCurrentValue()
+        }
+        var runningAddress = Self.legacyRunningInputAddress
+        guard AudioObjectHasProperty(inputDevice, &runningAddress),
+              AudioObjectAddPropertyListenerBlock(
+                  inputDevice,
+                  &runningAddress,
+                  .main,
+                  listener
+              ) == noErr else {
+            return
+        }
+
+        legacyInputDevice = inputDevice
+        legacyInputListener = listener
+    }
+
+    private func removeLegacyInputListener() {
+        if let legacyInputListener, legacyInputDevice != kAudioObjectUnknown {
+            var address = Self.legacyRunningInputAddress
+            AudioObjectRemovePropertyListenerBlock(
+                legacyInputDevice,
+                &address,
+                .main,
+                legacyInputListener
+            )
+        }
+        legacyInputListener = nil
+        legacyInputDevice = kAudioObjectUnknown
     }
 
     private static var processListAddress: AudioObjectPropertyAddress {
@@ -138,6 +202,22 @@ final class MicrophoneActivityMonitor {
         AudioObjectPropertyAddress(
             mSelector: kAudioProcessPropertyIsRunningInput,
             mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private static var defaultInputAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private static var legacyRunningInputAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeInput,
             mElement: kAudioObjectPropertyElementMain
         )
     }
@@ -161,11 +241,7 @@ final class MicrophoneActivityMonitor {
         }
 
         // Compatibility fallback for systems without Audio Process objects.
-        var defaultInputAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
+        var defaultInputAddress = Self.defaultInputAddress
         guard let inputDevice = audioObjectIDValue(
             object: systemObject,
             address: &defaultInputAddress
@@ -173,11 +249,7 @@ final class MicrophoneActivityMonitor {
             return false
         }
 
-        var runningAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
-            mScope: kAudioObjectPropertyScopeInput,
-            mElement: kAudioObjectPropertyElementMain
-        )
+        var runningAddress = Self.legacyRunningInputAddress
         return uint32Value(object: inputDevice, address: &runningAddress) == 1
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 
@@ -43,8 +44,12 @@ final class PostureController {
     private var callBlockers: Set<CallBlocker> = []
     private var captureGeneration: UInt64 = 0
     private var missingPoseCount = 0
-    private var maintenanceTimer: Timer?
-    private var maintenanceTickCount = 0
+    private var retryTimer: Timer?
+    private var pauseTimer: Timer?
+    private var systemNotificationTokens: [NSObjectProtocol] = []
+    private var displayedCameraName: String?
+    private var recordedHistoryState: PostureHistoryState?
+    private var lastHistoryRecordAt: Date?
 
     func start() {
         cameraService.onEvent = { [weak self] event in
@@ -78,7 +83,7 @@ final class PostureController {
             self?.selectCamera(cameraID)
         }
         statusBar.onMenuWillOpen = { [weak self] in
-            self?.refreshCameras()
+            self?.refreshExternalState()
         }
         statusBar.setHistoryProvider { [weak self] in
             self?.historyStore.binnedStates(count: 120) ?? []
@@ -86,20 +91,19 @@ final class PostureController {
         updateSoundAlertMenu()
 
         refreshCameras()
+        observeSystemChanges()
         microphoneMonitor.start()
-
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            self?.maintenanceTick()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        maintenanceTimer = timer
-
         reevaluateCapture()
     }
 
     func stop() {
-        maintenanceTimer?.invalidate()
-        maintenanceTimer = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
+        pauseTimer?.invalidate()
+        pauseTimer = nil
+        let center = NotificationCenter.default
+        systemNotificationTokens.forEach(center.removeObserver)
+        systemNotificationTokens.removeAll()
         historyStore.finish()
         soundAlert.reset()
         microphoneMonitor.stop()
@@ -108,7 +112,11 @@ final class PostureController {
 
     func resumeMonitoring() {
         monitoringMode = .active
+        pauseTimer?.invalidate()
+        pauseTimer = nil
         if case .retrying = captureLifecycle {
+            retryTimer?.invalidate()
+            retryTimer = nil
             captureLifecycle = .idle
         }
         reevaluateCapture()
@@ -163,7 +171,7 @@ final class PostureController {
         baselineStore.selectedCameraID = descriptor.id
         classifier.setBaseline(baselineStore.baseline(for: descriptor.id))
         callBlockers.remove(.camera)
-        captureLifecycle = .retrying(until: Date().addingTimeInterval(0.5))
+        scheduleRetry(after: 0.5)
         missingPoseCount = 0
         statusBar.updateCameras(cameras, selectedCameraID: selectedCameraID)
         updateDisplay(.starting)
@@ -173,9 +181,15 @@ final class PostureController {
         switch monitoringMode {
         case .active:
             monitoringMode = .pausedManually
+            pauseTimer?.invalidate()
+            pauseTimer = nil
         case .pausedManually, .pausedUntil:
             monitoringMode = .active
+            pauseTimer?.invalidate()
+            pauseTimer = nil
             if case .retrying = captureLifecycle {
+                retryTimer?.invalidate()
+                retryTimer = nil
                 captureLifecycle = .idle
             }
         }
@@ -183,7 +197,9 @@ final class PostureController {
     }
 
     private func pauseForThirtyMinutes() {
-        monitoringMode = .pausedUntil(Date().addingTimeInterval(30 * 60))
+        let date = Date().addingTimeInterval(30 * 60)
+        monitoringMode = .pausedUntil(date)
+        schedulePauseExpiration(at: date)
         reevaluateCapture()
     }
 
@@ -218,35 +234,58 @@ final class PostureController {
         )
     }
 
-    private func maintenanceTick() {
-        maintenanceTickCount += 1
-        soundAlert.tick()
+    private func observeSystemChanges() {
+        let center = NotificationCenter.default
+        let cameraNotifications: [Notification.Name] = [
+            AVCaptureDevice.wasConnectedNotification,
+            AVCaptureDevice.wasDisconnectedNotification
+        ]
 
-        if case let .pausedUntil(date) = monitoringMode, date <= Date() {
-            monitoringMode = .active
-            if case .retrying = captureLifecycle {
-                captureLifecycle = .idle
-            }
+        for name in cameraNotifications {
+            systemNotificationTokens.append(center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.refreshExternalState()
+            })
         }
 
-        if maintenanceTickCount.isMultiple(of: 10) {
-            refreshCamerasIfSelectionDisappeared()
-        }
+        systemNotificationTokens.append(center.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshExternalState()
+        })
+    }
 
+    private func refreshExternalState() {
         if case .permissionDenied = captureLifecycle,
            AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
             captureLifecycle = .idle
         }
-
+        refreshCameras()
         reevaluateCapture()
     }
 
-    private func refreshCamerasIfSelectionDisappeared() {
-        guard selectedCameraID == nil
-                || !CameraCaptureService.availableCameras().contains(where: { $0.id == selectedCameraID }) else {
+    private func schedulePauseExpiration(at date: Date) {
+        pauseTimer?.invalidate()
+        let timer = Timer(fireAt: date, interval: 0, target: self,
+                          selector: #selector(finishTimedPause), userInfo: nil, repeats: false)
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        pauseTimer = timer
+    }
+
+    @objc private func finishTimedPause() {
+        pauseTimer = nil
+        guard case let .pausedUntil(date) = monitoringMode,
+              date <= Date() else {
             return
         }
-        refreshCameras()
+        monitoringMode = .active
+        reevaluateCapture()
     }
 
     private var captureIsAllowed: Bool {
@@ -271,6 +310,8 @@ final class PostureController {
             return
         case .pausedUntil:
             monitoringMode = .active
+            pauseTimer?.invalidate()
+            pauseTimer = nil
         case .active:
             break
         }
@@ -294,6 +335,8 @@ final class PostureController {
 
         if case let .retrying(until) = captureLifecycle {
             guard until <= Date() else { return }
+            retryTimer?.invalidate()
+            retryTimer = nil
             captureLifecycle = .idle
         }
 
@@ -326,6 +369,8 @@ final class PostureController {
             cameraService.stop()
             captureLifecycle = .idle
         case .retrying:
+            retryTimer?.invalidate()
+            retryTimer = nil
             captureLifecycle = .idle
         case .idle, .permissionDenied:
             break
@@ -334,6 +379,8 @@ final class PostureController {
 
     private func invalidateCapture() {
         cameraService.stop()
+        retryTimer?.invalidate()
+        retryTimer = nil
         captureGeneration &+= 1
         captureLifecycle = .idle
     }
@@ -347,7 +394,25 @@ final class PostureController {
     }
 
     private func scheduleRetry(after delay: TimeInterval) {
-        captureLifecycle = .retrying(until: Date().addingTimeInterval(delay))
+        retryTimer?.invalidate()
+        let date = Date().addingTimeInterval(delay)
+        captureLifecycle = .retrying(until: date)
+
+        let timer = Timer(fireAt: date, interval: 0, target: self,
+                          selector: #selector(finishRetryDelay), userInfo: nil, repeats: false)
+        timer.tolerance = min(0.25, delay * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
+    }
+
+    @objc private func finishRetryDelay() {
+        retryTimer = nil
+        guard case let .retrying(until) = captureLifecycle,
+              until <= Date() else {
+            return
+        }
+        captureLifecycle = .idle
+        reevaluateCapture()
     }
 
     private func handleCameraEvent(_ event: CameraEvent) {
@@ -438,23 +503,49 @@ final class PostureController {
         case let .calibrating(collected, required):
             updateDisplay(.calibrating(collected: collected, required: required))
         case let .classified(isSlouching, _, didCalibrate):
+            let date = Date()
+            soundAlert.update(isBadPosture: isSlouching, at: date)
             if didCalibrate,
                let selectedCameraID,
                let baseline = classifier.baseline {
                 baselineStore.save(baseline, for: selectedCameraID)
             }
-            updateDisplay(isSlouching ? .slouching : .good)
+            updateDisplay(isSlouching ? .slouching : .good, at: date)
         }
     }
 
-    private func updateDisplay(_ state: PostureDisplayState) {
-        displayState = state
+    private func updateDisplay(_ state: PostureDisplayState, at date: Date = Date()) {
         let historyState = state.historyState
-        if historyStore.record(historyState) {
+        recordHistoryIfNeeded(historyState, at: date)
+
+        let stateChanged = state != displayState
+        let cameraChanged = selectedCameraName != displayedCameraName
+        guard stateChanged || cameraChanged else { return }
+
+        if stateChanged, historyState == .noRecording {
+            soundAlert.update(isBadPosture: false, at: date)
+        }
+
+        displayState = state
+        displayedCameraName = selectedCameraName
+        statusBar.update(state: state, cameraName: selectedCameraName)
+    }
+
+    private func recordHistoryIfNeeded(
+        _ state: PostureHistoryState,
+        at date: Date
+    ) {
+        let stateChanged = state != recordedHistoryState
+        let heartbeatDue = lastHistoryRecordAt.map {
+            date.timeIntervalSince($0) >= PostureHistoryStore.heartbeatInterval
+        } ?? true
+        guard stateChanged || heartbeatDue else { return }
+
+        if historyStore.record(state, at: date) {
             statusBar.refreshHistory()
         }
-        soundAlert.update(isBadPosture: historyState == .bad)
-        statusBar.update(state: state, cameraName: selectedCameraName)
+        recordedHistoryState = state
+        lastHistoryRecordAt = date
     }
 }
 
