@@ -38,8 +38,32 @@ struct ClassifierSmoke {
 
         testAlertVolumeRamp()
         testPostureHistory()
+        testCameraPreference()
 
         print("PostureBar smoke tests passed")
+    }
+
+    private static func testCameraPreference() {
+        let builtIn = CameraDescriptor(
+            id: "built-in",
+            name: "UGREEN Camera",
+            isExternal: false
+        )
+        let external = CameraDescriptor(
+            id: "usb",
+            name: "Any USB Webcam",
+            isExternal: true
+        )
+
+        precondition(
+            CameraSelectionPolicy.preferredCamera(from: [builtIn, external]) == external,
+            "An external webcam should be preferred regardless of its brand"
+        )
+        precondition(
+            CameraSelectionPolicy.preferredCamera(from: [builtIn]) == builtIn,
+            "The first available camera should be used as a fallback"
+        )
+        precondition(CameraSelectionPolicy.preferredCamera(from: []) == nil)
     }
 
     private static func testAlertVolumeRamp() {

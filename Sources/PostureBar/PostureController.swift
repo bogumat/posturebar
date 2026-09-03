@@ -101,7 +101,7 @@ final class PostureController {
             if let savedID, cameras.contains(where: { $0.id == savedID }) {
                 selectedCameraID = savedID
             } else {
-                selectedCameraID = CameraCaptureService.preferredCamera(from: cameras)?.id
+                selectedCameraID = CameraSelectionPolicy.preferredCamera(from: cameras)?.id
             }
         }
 

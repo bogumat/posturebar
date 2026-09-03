@@ -2,12 +2,6 @@ import AVFoundation
 import CoreVideo
 import Foundation
 
-struct CameraDescriptor: Equatable {
-    let id: String
-    let name: String
-    let isExternal: Bool
-}
-
 enum CameraEvent {
     case authorizationDenied
     case unavailable
@@ -48,13 +42,6 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     static func availableCameras() -> [CameraDescriptor] {
         discoverySession().devices.map(makeDescriptor)
-    }
-
-    static func preferredCamera(from cameras: [CameraDescriptor]) -> CameraDescriptor? {
-        cameras.first { $0.name.localizedCaseInsensitiveContains("UGREEN") }
-            ?? cameras.first { $0.name.localizedCaseInsensitiveContains("GREEN") }
-            ?? cameras.first(where: \.isExternal)
-            ?? cameras.first
     }
 
     func start(cameraID: String) {

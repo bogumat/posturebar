@@ -33,9 +33,9 @@ When asked for camera access, click **Allow**. Sit upright and reasonably still
 for about four seconds while PostureBar calibrates. Its icon will then appear
 in the menu bar.
 
-PostureBar prefers a camera with `UGREEN` in its name, then another external
-camera, then the built-in camera. Click the menu-bar icon to choose a different
-camera or recalibrate.
+On first launch, PostureBar prefers a plugged-in external webcam regardless of
+brand, then falls back to the first available camera. A camera chosen from the
+menu is remembered. Use the same menu to recalibrate.
 
 ## Using PostureBar
 

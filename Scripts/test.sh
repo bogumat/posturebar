@@ -22,6 +22,7 @@ swiftc \
     -target "$POSTURE_TARGET_TRIPLE" \
     "${POSTURE_SWIFT_FLAGS[@]}" \
     -o "$TEST_BIN_PATH/ClassifierSmoke" \
+    "$PROJECT_ROOT/Sources/PostureBar/CameraSelectionPolicy.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureClassifier.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureAlertPolicy.swift" \
     "$PROJECT_ROOT/Sources/PostureBar/PostureHistoryStore.swift" \
