@@ -6,6 +6,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onRecalibrate: (() -> Void)?
     var onToggleSoundAlerts: (() -> Void)?
     var onSelectSoundAlertDelay: ((PostureAlertDelay) -> Void)?
+    var onSelectSoundAlertVolumeMode: ((PostureAlertVolumeMode) -> Void)?
     var onSelectCamera: ((String) -> Void)?
     var onMenuWillOpen: (() -> Void)?
 
@@ -21,6 +22,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let recalibrateMenuItem = NSMenuItem(title: "Recalibrate Upright Posture…", action: #selector(recalibrate), keyEquivalent: "")
     private let soundAlertsMenuItem = NSMenuItem(title: "Sound Alerts", action: #selector(toggleSoundAlerts), keyEquivalent: "")
     private let soundAlertDelayMenuItem = NSMenuItem(title: "Buzz After", action: nil, keyEquivalent: "")
+    private let soundAlertVolumeMenuItem = NSMenuItem(title: "Buzz Volume", action: nil, keyEquivalent: "")
     private let privacySettingsMenuItem = NSMenuItem(title: "Open Camera Privacy Settings…", action: #selector(openCameraPrivacySettings), keyEquivalent: "")
 
     override init() {
@@ -48,6 +50,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
         soundAlertDelayMenuItem.submenu = soundAlertDelayMenu
 
+        let soundAlertVolumeMenu = NSMenu(title: "Buzz Volume")
+        for mode in PostureAlertVolumeMode.allCases {
+            let item = NSMenuItem(
+                title: mode.title,
+                action: #selector(selectSoundAlertVolumeMode(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = mode.rawValue
+            soundAlertVolumeMenu.addItem(item)
+        }
+        soundAlertVolumeMenuItem.submenu = soundAlertVolumeMenu
+
         menu.addItem(statusMenuItem)
         menu.addItem(cameraMenuItem)
         menu.addItem(.separator())
@@ -62,6 +77,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(recalibrateMenuItem)
         menu.addItem(soundAlertsMenuItem)
         menu.addItem(soundAlertDelayMenuItem)
+        menu.addItem(soundAlertVolumeMenuItem)
         menu.addItem(privacySettingsMenuItem)
         menu.addItem(.separator())
 
@@ -138,13 +154,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         historyView.needsDisplay = true
     }
 
-    func updateSoundAlerts(isEnabled: Bool, delay: PostureAlertDelay) {
+    func updateSoundAlerts(
+        isEnabled: Bool,
+        delay: PostureAlertDelay,
+        volumeMode: PostureAlertVolumeMode
+    ) {
         soundAlertsMenuItem.state = isEnabled ? .on : .off
         soundAlertDelayMenuItem.isEnabled = isEnabled
         soundAlertDelayMenuItem.title = "Buzz After: \(delay.title)"
+        soundAlertVolumeMenuItem.isEnabled = isEnabled
+        soundAlertVolumeMenuItem.title = "Buzz Volume: \(volumeMode.title)"
 
         for item in soundAlertDelayMenuItem.submenu?.items ?? [] {
             item.state = item.representedObject as? Int == delay.rawValue ? .on : .off
+        }
+        for item in soundAlertVolumeMenuItem.submenu?.items ?? [] {
+            item.state = item.representedObject as? String == volumeMode.rawValue ? .on : .off
         }
     }
 
@@ -175,6 +200,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return
         }
         onSelectSoundAlertDelay?(delay)
+    }
+
+    @objc private func selectSoundAlertVolumeMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = PostureAlertVolumeMode(rawValue: rawValue) else {
+            return
+        }
+        onSelectSoundAlertVolumeMode?(mode)
     }
 
     @objc private func selectCamera(_ sender: NSMenuItem) {

@@ -79,6 +79,9 @@ final class PostureController {
         statusBar.onSelectSoundAlertDelay = { [weak self] delay in
             self?.selectSoundAlertDelay(delay)
         }
+        statusBar.onSelectSoundAlertVolumeMode = { [weak self] mode in
+            self?.selectSoundAlertVolumeMode(mode)
+        }
         statusBar.onSelectCamera = { [weak self] cameraID in
             self?.selectCamera(cameraID)
         }
@@ -227,10 +230,16 @@ final class PostureController {
         updateSoundAlertMenu()
     }
 
+    private func selectSoundAlertVolumeMode(_ mode: PostureAlertVolumeMode) {
+        soundAlert.setVolumeMode(mode)
+        updateSoundAlertMenu()
+    }
+
     private func updateSoundAlertMenu() {
         statusBar.updateSoundAlerts(
             isEnabled: soundAlert.isEnabled,
-            delay: soundAlert.delay
+            delay: soundAlert.delay,
+            volumeMode: soundAlert.volumeMode
         )
     }
 

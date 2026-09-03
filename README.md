@@ -38,6 +38,19 @@ On first launch, PostureBar prefers a plugged-in external webcam regardless of
 brand, then falls back to the first available camera. A camera chosen from the
 menu is remembered. Use the same menu to recalibrate.
 
+## How detection works
+
+PostureBar uses Apple's Vision framework to locate the largest face in a
+low-resolution frame five times per second. Calibration records the face's
+vertical position and apparent size while you sit upright. Later readings are
+smoothed and compared with that baseline: a face moving lower is the main
+slouch signal, while a face becoming larger (moving closer) is a secondary
+signal. Three consistent readings are required before the indicator changes.
+
+Keep the camera position fixed and recalibrate after moving the camera, chair,
+or desk. PostureBar is a relative posture reminder, not an ergonomic or medical
+assessment. Frames are processed in memory and immediately discarded.
+
 ## Using PostureBar
 
 - Green tick: posture looks good
@@ -49,7 +62,9 @@ bars mean bad posture, and gray bars mean no recording.
 
 By default, the buzzer begins after 10 seconds of continuous slouching. Use
 **Buzz After** to choose 1s, 2s, 5s, 10s, 20s, 30s, or 1 minute. Use **Sound
-Alerts** to mute it without pausing posture monitoring.
+Alerts** to mute it without pausing posture monitoring. Under **Buzz Volume**,
+choose **Progressive** to start quietly and rise gradually, or **Constant
+(Maximum)** to play every buzz at maximum volume.
 
 PostureBar releases the camera when another app uses the microphone or camera,
 then resumes automatically when the call ends. You can also pause it manually.

@@ -4,6 +4,7 @@ final class PostureSoundAlert {
     private let defaults: UserDefaults
     private let enabledKey = "soundAlertsEnabled"
     private let delayKey = "soundAlertDelaySeconds"
+    private let volumeModeKey = "soundAlertVolumeMode"
     private var tracker = PostureAlertTracker()
     private var alertTimer: Timer?
     private var isTrackingBadPosture = false
@@ -12,6 +13,7 @@ final class PostureSoundAlert {
 
     private(set) var isEnabled: Bool
     private(set) var delay: PostureAlertDelay
+    private(set) var volumeMode: PostureAlertVolumeMode
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -23,6 +25,9 @@ final class PostureSoundAlert {
         delay = PostureAlertDelay(
             rawValue: defaults.integer(forKey: delayKey)
         ) ?? .defaultValue
+        volumeMode = defaults.string(forKey: volumeModeKey)
+            .flatMap(PostureAlertVolumeMode.init(rawValue:))
+            ?? .defaultValue
     }
 
     func setEnabled(_ isEnabled: Bool) {
@@ -40,6 +45,11 @@ final class PostureSoundAlert {
         alertTimer?.invalidate()
         alertTimer = nil
         scheduleNextAlert()
+    }
+
+    func setVolumeMode(_ volumeMode: PostureAlertVolumeMode) {
+        self.volumeMode = volumeMode
+        defaults.set(volumeMode.rawValue, forKey: volumeModeKey)
     }
 
     func update(isBadPosture: Bool, at date: Date = Date()) {
@@ -85,7 +95,11 @@ final class PostureSoundAlert {
     @objc private func fireAlert() {
         alertTimer = nil
         guard isEnabled,
-              let volume = tracker.nextVolume(at: Date(), delay: delay) else {
+              let volume = tracker.nextVolume(
+                  at: Date(),
+                  delay: delay,
+                  mode: volumeMode
+              ) else {
             return
         }
 

@@ -35,19 +35,45 @@ enum PostureAlertDelay: Int, CaseIterable {
     }
 }
 
+enum PostureAlertVolumeMode: String, CaseIterable {
+    case progressive
+    case constantMaximum
+
+    static let defaultValue: PostureAlertVolumeMode = .progressive
+
+    var title: String {
+        switch self {
+        case .progressive:
+            return "Progressive"
+        case .constantMaximum:
+            return "Constant (Maximum)"
+        }
+    }
+}
+
 enum PostureAlertPolicy {
     static let maximumVolumeTime: TimeInterval = 120
     static let beepInterval: TimeInterval = 5
+    static let progressiveInitialVolume: Float = 0.05
+    static let progressiveMaximumVolume: Float = 0.90
+    static let constantMaximumVolume: Float = 1.0
 
     static func volume(
         afterBadPosture duration: TimeInterval,
-        initialDelay: TimeInterval = PostureAlertDelay.defaultValue.duration
+        initialDelay: TimeInterval = PostureAlertDelay.defaultValue.duration,
+        mode: PostureAlertVolumeMode = .defaultValue
     ) -> Float? {
         guard duration >= initialDelay else { return nil }
+
+        if mode == .constantMaximum {
+            return constantMaximumVolume
+        }
 
         let rampDuration = maximumVolumeTime - initialDelay
         let progress = min(1, max(0, (duration - initialDelay) / rampDuration))
         let easedProgress = pow(progress, 1.35)
-        return Float(0.05 + (0.85 * easedProgress))
+        return progressiveInitialVolume
+            + ((progressiveMaximumVolume - progressiveInitialVolume)
+                * Float(easedProgress))
     }
 }

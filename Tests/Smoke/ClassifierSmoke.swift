@@ -130,11 +130,34 @@ struct ClassifierSmoke {
         let maximumVolume = PostureAlertPolicy.volume(afterBadPosture: 120)!
         let laterVolume = PostureAlertPolicy.volume(afterBadPosture: 300)!
 
-        precondition(abs(initialVolume - 0.05) < 0.001)
+        precondition(
+            abs(initialVolume - PostureAlertPolicy.progressiveInitialVolume) < 0.001
+        )
         precondition(middleVolume > initialVolume)
         precondition(maximumVolume > middleVolume)
-        precondition(abs(maximumVolume - 0.90) < 0.001)
+        precondition(
+            abs(maximumVolume - PostureAlertPolicy.progressiveMaximumVolume) < 0.001
+        )
         precondition(abs(laterVolume - maximumVolume) < 0.001)
+
+        precondition(
+            PostureAlertPolicy.volume(
+                afterBadPosture: 9.99,
+                mode: .constantMaximum
+            ) == nil
+        )
+        precondition(
+            PostureAlertPolicy.volume(
+                afterBadPosture: 10,
+                mode: .constantMaximum
+            ) == PostureAlertPolicy.constantMaximumVolume
+        )
+        precondition(
+            PostureAlertPolicy.volume(
+                afterBadPosture: 300,
+                mode: .constantMaximum
+            ) == PostureAlertPolicy.constantMaximumVolume
+        )
 
         for delay in PostureAlertDelay.allCases {
             precondition(

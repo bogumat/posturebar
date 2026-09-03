@@ -26,7 +26,8 @@ struct PostureAlertTracker {
 
     mutating func nextVolume(
         at date: Date,
-        delay: PostureAlertDelay
+        delay: PostureAlertDelay,
+        mode: PostureAlertVolumeMode = .defaultValue
     ) -> Float? {
         guard let badPostureStartedAt,
               let latestBadObservationAt else {
@@ -42,7 +43,8 @@ struct PostureAlertTracker {
 
         guard let volume = PostureAlertPolicy.volume(
             afterBadPosture: date.timeIntervalSince(badPostureStartedAt),
-            initialDelay: delay.duration
+            initialDelay: delay.duration,
+            mode: mode
         ) else {
             return nil
         }
